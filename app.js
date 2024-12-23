@@ -1,34 +1,30 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const nodemailer = require('nodemailer');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
 const authRoutes = require('./routes/auth');
-const uuid = require('uuid');
-const bcrypt = require('bcrypt'); // Added bcrypt import
-const Seller = require('./models/seller');
-const adminAuthRoutes = require('./routes/adminauth'); 
+const adminAuthRoutes = require('./routes/adminauth');
 const cartRoutes = require('./routes/cart');
 const complaintsRoutes = require('./routes/complaints');
 const couponRoutes = require('./routes/coupon')
 const Product = require('./models/product');
 const crypto = require('crypto');
 require('dotenv').config();
+const multer = require('multer');
+const path = require('path');
 
 const app = express();
+console.log('MONGO_URI:', process.env.MONGO_URI);
+
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3000','https://merabestie.com','https://hosteecommerce.vercel.app'], 
+  origin: ['http://localhost:3000', 'https://merabestie.com', 'https://hosteecommerce.vercel.app'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
-
-app.use(express.json());
-app.use(require('cookie-parser')());
-app.use(express.urlencoded({ extended: true }));
 
 app.use(
   session({
@@ -37,6 +33,10 @@ app.use(
     saveUninitialized: false,
     store: MongoStore.create({
       mongoUrl: process.env.MONGO_URI,
+      mongoOptions: {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+      },
       collectionName: 'sessions',
     }),
     cookie: {
@@ -47,22 +47,23 @@ app.use(
   })
 );
 
+
 // Routes
 app.use('/auth', authRoutes);
 app.use('/admin', adminAuthRoutes);
 app.use('/cart', cartRoutes);
 app.use('/complaints', complaintsRoutes);
-app.use('/coupon',couponRoutes)
+app.use('/coupon', couponRoutes)
 
 // MongoDB Connection
 const uri = process.env.MONGO_URI;
 mongoose.connect(uri)
-.then(() => console.log('Connected to MongoDB'))
-.catch(err => console.error('MongoDB connection error:', err));
+  .then(() => console.log('Connected to MongoDB'))
+  .catch(err => console.error('MongoDB connection error:', err));
 
 
 // Keep-Alive Route
-app.get('/keep-alive', (req, res) => {
+app.get('/keep-alive', (_req, res) => {
   res.status(200).json({
     success: true,
     message: 'Server is up and running'
@@ -73,27 +74,27 @@ app.get('/keep-alive', (req, res) => {
 app.post('/product/category', async (req, res) => {
   try {
     const { category } = req.body;
-    
+
     // Normalize the category to handle case variations
     let normalizedCategory = category.toLowerCase();
     let searchCategory;
 
     // Map normalized categories to their proper display versions
-    switch(normalizedCategory) {
+    switch (normalizedCategory) {
       case 'gift-boxes':
       case 'gift boxes':
         searchCategory = 'Gift Boxes';
         break;
       case 'books':
         searchCategory = 'Books';
-         break;
+        break;
       case 'stationery':
         searchCategory = 'Stationery';
         break;
       default:
         searchCategory = category;
     }
-    
+
     const products = await Product.find({ category: searchCategory });
 
     res.status(200).json({
@@ -117,7 +118,7 @@ app.post('/create-product', async (req, res) => {
     const productData = req.body;
     const product = new Product(productData);
     const result = await product.save();
-    
+
     res.status(201).json({
       success: true,
       message: 'Product created successfully',
@@ -133,7 +134,7 @@ app.post('/create-product', async (req, res) => {
 });
 
 // Get All Products Route
-app.get('/get-product', async (req, res) => {
+app.get('/get-product', async (_req, res) => {
   try {
     const products = await Product.find();
     res.status(200).json({
@@ -217,7 +218,7 @@ app.get('/product/:productId', async (req, res) => {
   try {
     const { productId } = req.params;
     const product = await Product.findById(productId);
-    
+
     if (!product) {
       return res.status(404).json({
         success: false,
@@ -231,7 +232,7 @@ app.get('/product/:productId', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({
-      success: false, 
+      success: false,
       message: 'Error fetching product',
       error: error.message
     });
@@ -283,11 +284,11 @@ app.put('/instock-update', async (req, res) => {
 // Complaints Schema
 
 // Assign Product ID Route
-app.get('/assign-productid', async (req, res) => {
+app.get('/assign-productid', async (_req, res) => {
   try {
     // Find all products
     const products = await Product.find();
-    
+
     if (products.length === 0) {
       return res.status(404).send('No products found to assign productIds.');
     }
@@ -302,7 +303,7 @@ app.get('/assign-productid', async (req, res) => {
       do {
         productId = Math.floor(100000 + Math.random() * 900000).toString();
       } while (usedIds.has(productId));
-      
+
       usedIds.add(productId);
 
       const updateResult = await Product.findOneAndUpdate(
@@ -397,10 +398,10 @@ const Order = mongoose.model('Order', orderSchema);
 
 // Place Order Route
 // Get All Orders Route
-app.get('/get-orders', async (req, res) => {
+app.get('/get-orders', async (_req, res) => {
   try {
     const orders = await Order.find();
-    
+
     res.status(200).json({
       success: true,
       orders
@@ -415,14 +416,70 @@ app.get('/get-orders', async (req, res) => {
   }
 });
 
+
+// Set the storage engine for multer
+const storage = multer.diskStorage({
+  destination: function (_req, _file, cb) {
+    cb(null, 'uploads/'); // Store images in 'uploads' directory
+  },
+  filename: function (_req, file, cb) {
+    cb(null, Date.now() + path.extname(file.originalname)); // Name the file uniquely
+  },
+});
+
+// Initialize multer upload middleware
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // Max file size 5MB
+  fileFilter: function (_req, file, cb) {
+    const filetypes = /jpeg|jpg|png|gif/; // Allow only image file types
+    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = filetypes.test(file.mimetype);
+    if (extname && mimetype) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only image files are allowed.'));
+    }
+  },
+});
+
+// Route to create a product with multiple images
+app.post('/create-product', upload.array('images', 5), async (req, res) => {
+  try {
+    const productData = req.body;
+
+    // Map the uploaded files to their paths
+    const images = req.files ? req.files.map(file => `/uploads/${file.filename}`) : [];
+
+    const product = new Product({
+      ...productData,
+      images: images, // Add images to product data
+    });
+
+    const result = await product.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Product created successfully',
+      product: result
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error creating product',
+      error: error.message
+    });
+  }
+});
+
 // Get User Details Route
-app.get('/get-user', async (req, res) => {
+app.get('/get-user', async (_req, res) => {
   try {
     const users = await mongoose.model('User').find(
       {}, // Remove filter to get all users
       '-password' // Exclude only the password field
     );
-    
+
     res.status(200).json({
       success: true,
       users
@@ -474,7 +531,22 @@ app.put('/update-account-status', async (req, res) => {
   }
 });
 
-const otpStore = new Map();
+const VerifyEmail = () => {
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get('token');
+    if (token) {
+      fetch(`/api/auth/verify-email?token=${token}`, { method: 'GET' })
+        .then(res => res.json())
+        .then(data => alert(data.message))
+        .catch(err => console.error(err));
+    }
+  }, []);
+
+  return <h1>Email Verification</h1>;
+};
+
+export default VerifyEmail;
+
 
 app.post('/find-my-order', async (req, res) => {
   try {
@@ -501,7 +573,7 @@ app.post('/find-my-order', async (req, res) => {
     const findProductDetails = async (productIds) => {
       try {
         const productDetails = [];
-        
+
         // Make API calls for each productId
         for (const productId of productIds) {
           try {
